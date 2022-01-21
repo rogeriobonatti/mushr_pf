@@ -9,13 +9,14 @@ from threading import Lock
 import numpy as np
 import rospy
 import tf
-from geometry_msgs.msg import PoseArray, PoseStamped, PoseWithCovarianceStamped
+from geometry_msgs.msg import Pose, PoseArray, PoseStamped, PoseWithCovarianceStamped
 from nav_msgs.msg import OccupancyGrid, Odometry
 from sensor_msgs.msg import LaserScan
 from tf.transformations import euler_from_quaternion, quaternion_from_euler
 
 import utils
 from motion_model import KinematicMotionModel
+from motion_model_t265 import KinematicMotionModelT265
 from resample import ReSampler
 from sensor_model import SensorModel
 
@@ -34,6 +35,7 @@ class ParticleFilter:
         n_viz_particles,
         odometry_topic,
         motor_state_topic,
+        t265_state_topic,
         servo_state_topic,
         scan_topic,
         laser_ray_step,
@@ -65,6 +67,9 @@ class ParticleFilter:
           car_length: The length of the car
         """
         self.PUBLISH_TF = publish_tf
+        self.has_new_t265_frame = False
+        self.new_frame_time = None
+        self.pose_ref_t265 = None
         # The number of particles in this implementation, the total number of particles is constant.
         self.N_PARTICLES = n_particles
         self.N_VIZ_PARTICLES = n_viz_particles  # The number of particles to visualize
@@ -131,14 +136,21 @@ class ParticleFilter:
         )
 
         # An object used for applying kinematic motion model
-        self.motion_model = KinematicMotionModel(
-            motor_state_topic,
-            servo_state_topic,
-            speed_to_erpm_offset,
-            speed_to_erpm_gain,
-            steering_angle_to_servo_offset,
-            steering_angle_to_servo_gain,
-            car_length,
+        # self.motion_model = KinematicMotionModel(
+        #     motor_state_topic,
+        #     servo_state_topic,
+        #     speed_to_erpm_offset,
+        #     speed_to_erpm_gain,
+        #     steering_angle_to_servo_offset,
+        #     steering_angle_to_servo_gain,
+        #     car_length,
+        #     self.particles,
+        #     self.state_lock,
+        # )
+
+        # An object used for applying T265 motion model
+        self.motion_model = KinematicMotionModelT265(
+            t265_state_topic,
             self.particles,
             self.state_lock,
         )
@@ -264,9 +276,32 @@ class ParticleFilter:
                 "/map",
             )
 
+            if self.pose_ref_t265 is not None:
+                self.pub_tf.sendTransform(
+                (self.pose_ref_t265.position.x, self.pose_ref_t265.position.y, 0.0),
+                (self.pose_ref_t265.orientation.x, self.pose_ref_t265.orientation.y, self.pose_ref_t265.orientation.z, self.pose_ref_t265.orientation.w),
+                stamp,
+                self.name +"/camera_odom_frame",
+                "/map",
+                )
+
         except (tf.LookupException) as e:  # Will occur if odom frame does not exist
             print(e)
             print("failed to find odom")
+
+        # after the new frame is set with the mouse, wait a few seconds until the PF converges
+        # this will become the new reference frame for the T265 odometry to be published
+        if self.has_new_t265_frame:
+            if (stamp.to_sec() - self.new_frame_time.to_sec()) > 4.0:
+                print("bla")
+                self.has_new_t265_frame = False
+                self.pose_ref_t265 = Pose()
+                self.pose_ref_t265.position.x = pose[0]
+                self.pose_ref_t265.position.y = pose[1]
+                self.pose_ref_t265.position.z = 0.0
+                self.pose_ref_t265.orientation = utils.angle_to_quaternion(pose[2])
+                self.has_new_t265_frame = False
+
 
     def expected_pose(self):
         """
@@ -313,6 +348,9 @@ class ParticleFilter:
             )
             self.weights.fill(1 / self.N_PARTICLES)
             self.state_lock.release()
+            self.has_new_t265_frame = True
+            self.new_frame_time = rospy.Time.now()
+
 
     def visualize(self):
         """
@@ -467,6 +505,8 @@ if __name__ == "__main__":
     odometry_topic = rospy.get_param("~odometry_topic", "/vesc/odom")
     # The topic containing motor state information
     motor_state_topic = rospy.get_param("~motor_state_topic", "/vesc/sensors/core")
+    # The topic containing T265 state information
+    t265_state_topic = rospy.get_param("~t265_state_topic", "/camera/odom/sample")
     # The topic containing servo state information
     servo_state_topic = rospy.get_param(
         "~servo_state_topic", "/vesc/sensors/servo_position_command"
@@ -505,6 +545,7 @@ if __name__ == "__main__":
         n_viz_particles,
         car_name + odometry_topic,
         car_name + motor_state_topic,
+        car_name + t265_state_topic,
         car_name + servo_state_topic,
         car_name + scan_topic,
         laser_ray_step,
@@ -534,9 +575,11 @@ if __name__ == "__main__":
             pf.ents = Queue.Queue()
             pf.ents_sum = 0.0
             pf.noisy_cnt = 0
+            # print("a")
         # Check if the sensor model says it's time to resample
         elif pf.sensor_model.do_resample:
             # Reset so that we don't keep resampling
             pf.sensor_model.do_resample = False
             pf.resampler.resample_low_variance()
             pf.visualize()  # Perform visualization
+            # print("b")

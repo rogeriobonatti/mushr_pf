@@ -4,6 +4,7 @@
     <arg name="n_viz_particles" default="60" />
     <arg name="odometry_topic" default="/vesc/odom" />
     <arg name="motor_state_topic" default="/vesc/sensors/core" />
+    <arg name="t265_state_topic" default="/camera/odom/sample" />
     <arg name="servo_state_topic" default="/vesc/sensors/servo_position_command" />
     <arg name="scan_topic" default="/scan"/>
     <arg name="laser_ray_step" default="18"/> 
@@ -18,6 +19,7 @@
             <param name="n_viz_particles" value="$(arg n_viz_particles)"/>
             <param name="odometry_topic" value="$(arg odometry_topic)"/>
             <param name="motor_state_topic" value="$(arg motor_state_topic)" />
+            <param name="t265_state_topic" value="$(arg t265_state_topic)" />
             <param name="servo_state_topic" value="$(arg servo_state_topic)" />
             <param name="scan_topic" value="$(arg scan_topic)"/>
             <param name="laser_ray_step" value="$(arg laser_ray_step)"/>
